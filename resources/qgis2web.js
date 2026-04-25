@@ -466,9 +466,31 @@ function onSingleClickWMS(evt) {
 
                 Promise.race([tryFetch(urlsToTry), timeoutPromise])
                     .then((html) => {
-                        if (html.indexOf('<table') !== -1) {
-                            popupContent += '<a><b>' + wmsTitle + '</b></a>';
-                            popupContent += html + '<p></p>';
+                        if (html.indexOf('<table') !== -1 || html.indexOf('<TABLE') !== -1) {
+                            var parser = new DOMParser();
+                            var doc = parser.parseFromString(html, 'text/html');
+                            var rows = doc.querySelectorAll('tr');
+                            var fincaValue = '';
+                            
+                            for (var r = 0; r < rows.length; r++) {
+                                var cells = rows[r].querySelectorAll('th, td');
+                                if (cells.length >= 2) {
+                                    var key = (cells[0].textContent || '').trim().toLowerCase();
+                                    var val = (cells[1].textContent || '').trim();
+                                    if (key.indexOf('finca') !== -1 || key.indexOf('num_finca') !== -1 || key.indexOf('nfinca') !== -1 || key.indexOf('numero') !== -1) {
+                                        fincaValue = val;
+                                        break;
+                                    }
+                                }
+                            }
+                            
+                            popupContent += '<a><b>' + wmsTitle + '</b></a><br>';
+                            if (fincaValue) {
+                                popupContent += '<div style="margin-top: 5px; font-size: 13px;"><b>Finca:</b> ' + fincaValue + '</div><br>';
+                            } else {
+                                // Fallback a mostrar todo si no encuentra el campo finca
+                                popupContent += html + '<br>';
+                            }
                             updatePopup();
                         }
                     })
