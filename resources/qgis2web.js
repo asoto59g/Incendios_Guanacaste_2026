@@ -413,12 +413,12 @@ function onSingleClickWMS(evt) {
     if (doHover || sketch) {
         return;
     }
-    if (!featuresPopupActive) {
-        popupContent = '';
-    }
+    
     var coord = evt.coordinate;
     var viewProjection = map.getView().getProjection();
     var viewResolution = map.getView().getResolution();
+
+    var fetchPromises = [];
 
     for (var i = 0; i < wms_layers.length; i++) {
         if (wms_layers[i][1] && wms_layers[i][0].getVisible()) {
@@ -428,32 +428,10 @@ function onSingleClickWMS(evt) {
                 });
             if (url) {
                 const wmsTitle = wms_layers[i][0].get('popuplayertitle');
-                var loaderHtml = '<div class="wms-loader" style="font-size: 13px; color: #ff9a56; padding: 5px;">Consultando finca...</div>';
-
-                popupCoord = coord;
-                popupContent += loaderHtml;
-                updatePopup();
-
-                var timeoutPromise = new Promise((resolve, reject) => {
-                    setTimeout(() => {
-                        reject(new Error('Tiempo de espera agotado (5s)'));
-                    }, 5000);
+                
+                var timeoutPromise = new Promise((_, reject) => {
+                    setTimeout(() => reject(new Error('Timeout de 5 segundos')), 5000);
                 });
-
-                function tryFetch(urls) {
-                    if (urls.length === 0) {
-                        return Promise.reject(new Error('Todos los intentos de conexión fallaron (posible bloqueo CORS)'));
-                    }
-                    return fetch(urls[0])
-                        .then((response) => {
-                            if (response.ok) {
-                                return response.text();
-                            } else {
-                                throw new Error('Error HTTP: ' + response.status);
-                            }
-                        })
-                        .catch(() => tryFetch(urls.slice(1)));
-                }
 
                 const urlsToTry = [
                     url,
@@ -461,59 +439,87 @@ function onSingleClickWMS(evt) {
                     'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)
                 ];
 
-                Promise.race([tryFetch(urlsToTry), timeoutPromise])
-                    .then((html) => {
-                        popupContent = popupContent.replace(loaderHtml, '');
+                var fetchPromise = new Promise((resolve) => {
+                    function tryFetch(urls) {
+                        if (urls.length === 0) return resolve({ title: wmsTitle, error: 'Bloqueo CORS o no hay conexión' });
+                        fetch(urls[0])
+                            .then(r => r.ok ? r.text() : Promise.reject(new Error(r.status)))
+                            .then(html => resolve({ title: wmsTitle, html: html }))
+                            .catch(() => tryFetch(urls.slice(1)));
+                    }
+                    Promise.race([
+                        new Promise((r) => tryFetch(urlsToTry)),
+                        timeoutPromise
+                    ]).catch(err => resolve({ title: wmsTitle, error: err.message }));
+                });
+
+                fetchPromises.push(fetchPromise);
+            }
+        }
+    }
+
+    if (fetchPromises.length > 0) {
+        popupContent = '<div style="font-size: 13px; color: #ff9a56; padding: 5px;">Consultando finca...</div>';
+        popupCoord = coord;
+        updatePopup();
+
+        Promise.all(fetchPromises).then((results) => {
+            var finalHtml = '';
+            var foundValidData = false;
+
+            results.forEach((res) => {
+                if (res.error) {
+                    finalHtml += '<div style="margin-bottom: 5px;"><a><b>' + res.title + '</b></a></div>';
+                    finalHtml += '<div style="color: #ff6b6b; font-size: 11px; padding: 5px;">Error: ' + res.error + '</div><br>';
+                    foundValidData = true;
+                } else if (res.html) {
+                    if (res.html.trim().length > 0 && (res.html.indexOf('<table') !== -1 || res.html.indexOf('<TABLE') !== -1)) {
+                        var parser = new DOMParser();
+                        var doc = parser.parseFromString(res.html, 'text/html');
+                        var rows = doc.querySelectorAll('tr');
+                        var fincaValue = '';
                         
-                        if (html && html.trim().length > 0 && (html.indexOf('<table') !== -1 || html.indexOf('<TABLE') !== -1)) {
-                            var parser = new DOMParser();
-                            var doc = parser.parseFromString(html, 'text/html');
-                            var rows = doc.querySelectorAll('tr');
-                            var fincaValue = '';
-                            
-                            for (var r = 0; r < rows.length; r++) {
-                                var cells = rows[r].querySelectorAll('th, td');
-                                if (cells.length >= 2) {
-                                    var key = (cells[0].textContent || '').trim().toLowerCase();
-                                    var val = (cells[1].textContent || '').trim();
-                                    if (key.indexOf('finca') !== -1 || key.indexOf('num_finca') !== -1 || key.indexOf('nfinca') !== -1 || key.indexOf('numero') !== -1 || key.indexOf('plano') !== -1 || key.indexOf('propietario') !== -1) {
-                                        if (key.indexOf('finca') !== -1 || key.indexOf('num') !== -1) {
-                                            fincaValue = val;
-                                            break;
-                                        } else if (!fincaValue) {
-                                            fincaValue = val; // fallback to plano or propietario if finca not found yet
-                                        }
+                        for (var r = 0; r < rows.length; r++) {
+                            var cells = rows[r].querySelectorAll('th, td');
+                            if (cells.length >= 2) {
+                                var key = (cells[0].textContent || '').trim().toLowerCase();
+                                var val = (cells[1].textContent || '').trim();
+                                if (key.indexOf('finca') !== -1 || key.indexOf('num') !== -1 || key.indexOf('plano') !== -1) {
+                                    if (key.indexOf('finca') !== -1 || key.indexOf('num') !== -1) {
+                                        fincaValue = val;
+                                        break;
+                                    } else if (!fincaValue) {
+                                        fincaValue = val;
                                     }
                                 }
                             }
-                            
-                            popupContent += '<div style="margin-bottom: 5px;"><a><b>' + wmsTitle + '</b></a></div>';
-                            if (fincaValue) {
-                                popupContent += '<div style="font-size: 13px; padding: 5px; background: #2c2c2c; color: white; border-radius: 4px;"><b>Finca:</b> ' + fincaValue + '</div><br>';
-                            } else {
-                                popupContent += '<div style="color:red; font-size:11px;">No se encontró el campo Finca.</div>';
-                                popupContent += html + '<br>';
-                            }
-                            updatePopup();
-                        } else {
-                            // Server returned something, but not a table
-                            if (popupContent.trim() === '') {
-                                popupContent += '<div style="font-size: 12px; color: #888;">Respuesta vacía o formato desconocido del servidor SNITCR.</div>';
-                                updatePopup();
-                            }
                         }
-                    })
-                    .catch((err) => {
-                        popupContent = popupContent.replace(loaderHtml, '');
-                        popupContent += '<div style="color: #ff6b6b; font-size: 12px; padding: 5px;"><b>Error de red:</b><br>' + err.message + '</div>';
-                        updatePopup();
-                    })
-                    .finally(() => {
-                        var loaderIcon = document.querySelector('.wms-loader');
-                        if (loaderIcon) loaderIcon.remove();
-                    });
+
+                        finalHtml += '<div style="margin-bottom: 5px;"><a><b>' + res.title + '</b></a></div>';
+                        if (fincaValue) {
+                            finalHtml += '<div style="font-size: 13px; padding: 5px; background: #2c2c2c; color: white; border-radius: 4px;"><b>Finca:</b> ' + fincaValue + '</div><br>';
+                        } else {
+                            finalHtml += '<div style="color:red; font-size:11px;">Campo Finca no encontrado.</div>';
+                            finalHtml += res.html + '<br>';
+                        }
+                        foundValidData = true;
+                    } else {
+                        // Responded successfully but no table
+                        // Final html will remain empty for this layer unless it's the only one
+                    }
+                }
+            });
+
+            if (foundValidData) {
+                popupContent = finalHtml;
+                updatePopup();
+            } else {
+                // If nothing was found to show (e.g., clicked empty space and WMS returned empty body)
+                popupContent = '';
+                var container = document.getElementById('popup');
+                if (container) container.style.display = 'none';
             }
-        }
+        });
     }
 }
 
