@@ -422,44 +422,112 @@ function onSingleClickWMS(evt) {
 
     for (var i = 0; i < wms_layers.length; i++) {
         if (wms_layers[i][1] && wms_layers[i][0].getVisible()) {
-            var url = wms_layers[i][0].getSource().getFeatureInfoUrl(
-                evt.coordinate, viewResolution, viewProjection, {
-                    'INFO_FORMAT': 'text/html',
-                });
-            if (url) {
-                const wmsTitle = wms_layers[i][0].get('popuplayertitle');
-                
-                var timeoutPromise = new Promise((_, reject) => {
-                    setTimeout(() => reject(new Error('Tiempo de espera agotado (20s)')), 20000);
-                });
-
-                const urlsToTry = [
-                    url,
-                    'https://corsproxy.io/?' + encodeURIComponent(url),
-                    'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)
-                ];
-
-                var fetchPromise = new Promise((resolve) => {
-                    function tryFetch(urls) {
-                        if (urls.length === 0) return resolve({ title: wmsTitle, error: 'Bloqueo CORS o no hay conexión' });
-                        fetch(urls[0])
-                            .then(r => r.ok ? r.text() : Promise.reject(new Error(r.status)))
-                            .then(html => resolve({ title: wmsTitle, html: html }))
-                            .catch(() => tryFetch(urls.slice(1)));
+            const wmsTitle = wms_layers[i][0].get('popuplayertitle');
+            
+            // Creamos la promesa para esta capa
+            var layerPromise = new Promise((resolve) => {
+                // 1. URL base para JSON
+                var urlJson = wms_layers[i][0].getSource().getFeatureInfoUrl(
+                    evt.coordinate, viewResolution, viewProjection, {
+                        'INFO_FORMAT': 'application/json',
+                        'FEATURE_COUNT': 1
                     }
-                    Promise.race([
-                        new Promise((r) => tryFetch(urlsToTry)),
-                        timeoutPromise
-                    ]).catch(err => resolve({ title: wmsTitle, error: err.message }));
-                });
+                );
 
-                fetchPromises.push(fetchPromise);
-            }
+                if (!urlJson) {
+                    resolve({ title: wmsTitle, error: 'Capa no consultable' });
+                    return;
+                }
+
+                // Extraer el número de finca del JSON (FeatureCollection)
+                function extractFincaFromJson(data) {
+                    if (data && data.features && data.features.length > 0) {
+                        var props = data.features[0].properties;
+                        if (props) {
+                            var fincaKeys = ['finca', 'num_finca', 'nfinca', 'numero', 'plano', 'propietario'];
+                            for (var k in props) {
+                                var kLower = k.toLowerCase();
+                                for (var j=0; j<fincaKeys.length; j++) {
+                                    if (kLower.indexOf(fincaKeys[j]) !== -1) {
+                                        return props[k];
+                                    }
+                                }
+                            }
+                            // Si no encuentra los nombres exactos, devuelve la primera propiedad (fallback)
+                            return Object.values(props)[0];
+                        }
+                    }
+                    return null;
+                }
+
+                // INTENTO 1: Usar JSONP (evita CORS nativamente si Geoserver lo tiene activado)
+                var callbackName = 'jsonp_' + Math.round(Math.random() * 1000000);
+                var urlJsonp = wms_layers[i][0].getSource().getFeatureInfoUrl(
+                    evt.coordinate, viewResolution, viewProjection, {
+                        'INFO_FORMAT': 'text/javascript',
+                        'format_options': 'callback:' + callbackName,
+                        'FEATURE_COUNT': 1
+                    }
+                );
+
+                var script = document.createElement('script');
+                var jsonpTimeout;
+
+                window[callbackName] = function(data) {
+                    clearTimeout(jsonpTimeout);
+                    delete window[callbackName];
+                    document.body.removeChild(script);
+                    var finca = extractFincaFromJson(data);
+                    resolve({ title: wmsTitle, finca: finca, raw: data });
+                };
+
+                script.onerror = function() {
+                    // JSONP falló (probablemente deshabilitado en Geoserver).
+                    clearTimeout(jsonpTimeout);
+                    delete window[callbackName];
+                    document.body.removeChild(script);
+                    tryProxy(); // Intento 2
+                };
+
+                // INTENTO 2: Proxies con application/json
+                function tryProxy() {
+                    var urlsToTry = [
+                        'https://corsproxy.io/?' + encodeURIComponent(urlJson),
+                        'https://api.allorigins.win/raw?url=' + encodeURIComponent(urlJson)
+                    ];
+
+                    function fetchNext(urls) {
+                        if (urls.length === 0) return resolve({ title: wmsTitle, error: 'Bloqueo CORS severo en el servidor SNITCR.' });
+                        fetch(urls[0])
+                            .then(r => r.ok ? r.json() : Promise.reject())
+                            .then(data => {
+                                var finca = extractFincaFromJson(data);
+                                resolve({ title: wmsTitle, finca: finca });
+                            })
+                            .catch(() => fetchNext(urls.slice(1)));
+                    }
+                    fetchNext(urlsToTry);
+                }
+
+                // Iniciar JSONP
+                script.src = urlJsonp;
+                document.body.appendChild(script);
+
+                // Timeout de 10s para JSONP, luego pasa a proxy
+                jsonpTimeout = setTimeout(() => {
+                    delete window[callbackName];
+                    script.onerror = null;
+                    document.body.removeChild(script);
+                    tryProxy();
+                }, 10000);
+            });
+
+            fetchPromises.push(layerPromise);
         }
     }
 
     if (fetchPromises.length > 0) {
-        popupContent = '<div style="font-size: 13px; color: #ff9a56; padding: 5px;">Consultando finca...</div>';
+        popupContent = '<div style="font-size: 13px; color: #ff9a56; padding: 5px;">Consultando Catastro SNITCR...</div>';
         popupCoord = coord;
         updatePopup();
 
@@ -472,41 +540,13 @@ function onSingleClickWMS(evt) {
                     finalHtml += '<div style="margin-bottom: 5px;"><a><b>' + res.title + '</b></a></div>';
                     finalHtml += '<div style="color: #ff6b6b; font-size: 11px; padding: 5px;">Error: ' + res.error + '</div><br>';
                     foundValidData = true;
-                } else if (res.html) {
-                    if (res.html.trim().length > 0 && (res.html.indexOf('<table') !== -1 || res.html.indexOf('<TABLE') !== -1)) {
-                        var parser = new DOMParser();
-                        var doc = parser.parseFromString(res.html, 'text/html');
-                        var rows = doc.querySelectorAll('tr');
-                        var fincaValue = '';
-                        
-                        for (var r = 0; r < rows.length; r++) {
-                            var cells = rows[r].querySelectorAll('th, td');
-                            if (cells.length >= 2) {
-                                var key = (cells[0].textContent || '').trim().toLowerCase();
-                                var val = (cells[1].textContent || '').trim();
-                                if (key.indexOf('finca') !== -1 || key.indexOf('num') !== -1 || key.indexOf('plano') !== -1) {
-                                    if (key.indexOf('finca') !== -1 || key.indexOf('num') !== -1) {
-                                        fincaValue = val;
-                                        break;
-                                    } else if (!fincaValue) {
-                                        fincaValue = val;
-                                    }
-                                }
-                            }
-                        }
-
-                        finalHtml += '<div style="margin-bottom: 5px;"><a><b>' + res.title + '</b></a></div>';
-                        if (fincaValue) {
-                            finalHtml += '<div style="font-size: 13px; padding: 5px; background: #2c2c2c; color: white; border-radius: 4px;"><b>Finca:</b> ' + fincaValue + '</div><br>';
-                        } else {
-                            finalHtml += '<div style="color:red; font-size:11px;">Campo Finca no encontrado.</div>';
-                            finalHtml += res.html + '<br>';
-                        }
-                        foundValidData = true;
-                    } else {
-                        // Responded successfully but no table
-                        // Final html will remain empty for this layer unless it's the only one
-                    }
+                } else if (res.finca) {
+                    finalHtml += '<div style="margin-bottom: 5px;"><a><b>' + res.title + '</b></a></div>';
+                    finalHtml += '<div style="font-size: 13px; padding: 5px; background: #2c2c2c; color: white; border-radius: 4px;"><b>Finca / Id:</b> ' + res.finca + '</div><br>';
+                    foundValidData = true;
+                } else if (res.raw) {
+                    finalHtml += '<div style="color:red; font-size:11px;">El área seleccionada no tiene polígono de finca.</div>';
+                    foundValidData = true;
                 }
             });
 
@@ -514,7 +554,6 @@ function onSingleClickWMS(evt) {
                 popupContent = finalHtml;
                 updatePopup();
             } else {
-                // If nothing was found to show (e.g., clicked empty space and WMS returned empty body)
                 popupContent = '';
                 var container = document.getElementById('popup');
                 if (container) container.style.display = 'none';
