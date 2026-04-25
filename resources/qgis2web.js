@@ -430,7 +430,7 @@ function onSingleClickWMS(evt) {
                 const wmsTitle = wms_layers[i][0].get('popuplayertitle');
                 
                 var timeoutPromise = new Promise((_, reject) => {
-                    setTimeout(() => reject(new Error('Timeout de 5 segundos')), 5000);
+                    setTimeout(() => reject(new Error('Tiempo de espera agotado (20s)')), 20000);
                 });
 
                 const urlsToTry = [
