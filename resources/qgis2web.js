@@ -428,46 +428,44 @@ function onSingleClickWMS(evt) {
                 });
             if (url) {
                 const wmsTitle = wms_layers[i][0].get('popuplayertitle');
-                var ldsRoller = '<div class="roller-switcher" style="height: 25px; width: 25px;"></div>';
+                var loaderHtml = '<div class="wms-loader" style="font-size: 13px; color: #ff9a56; padding: 5px;">Consultando finca...</div>';
 
                 popupCoord = coord;
-                popupContent += ldsRoller;
+                popupContent += loaderHtml;
                 updatePopup();
 
                 var timeoutPromise = new Promise((resolve, reject) => {
                     setTimeout(() => {
-                        reject(new Error('Timeout exceeded'));
-                    }, 5000); // (5 second)
+                        reject(new Error('Tiempo de espera agotado (5s)'));
+                    }, 5000);
                 });
 
-                // Function to try fetch with different option
                 function tryFetch(urls) {
                     if (urls.length === 0) {
-                        return Promise.reject(new Error('All fetch attempts failed'));
+                        return Promise.reject(new Error('Todos los intentos de conexión fallaron (posible bloqueo CORS)'));
                     }
                     return fetch(urls[0])
                         .then((response) => {
                             if (response.ok) {
                                 return response.text();
                             } else {
-                                throw new Error('Fetch failed');
+                                throw new Error('Error HTTP: ' + response.status);
                             }
                         })
-                        .catch(() => tryFetch(urls.slice(1))); // Try next URL
+                        .catch(() => tryFetch(urls.slice(1)));
                 }
 
-                // List of URLs to try
-                // The first URL is the original, the second is the encoded version, and the third is the proxy
                 const urlsToTry = [
                     url,
-                    encodeURIComponent(url),
+                    'https://corsproxy.io/?' + encodeURIComponent(url),
                     'https://api.allorigins.win/raw?url=' + encodeURIComponent(url)
                 ];
 
                 Promise.race([tryFetch(urlsToTry), timeoutPromise])
                     .then((html) => {
-                        // Check if the response contains actual data (Geoserver usually returns a table or at least some body content)
-                        if (html && html.trim().length > 0 && html.indexOf('<table') !== -1) {
+                        popupContent = popupContent.replace(loaderHtml, '');
+                        
+                        if (html && html.trim().length > 0 && (html.indexOf('<table') !== -1 || html.indexOf('<TABLE') !== -1)) {
                             var parser = new DOMParser();
                             var doc = parser.parseFromString(html, 'text/html');
                             var rows = doc.querySelectorAll('tr');
@@ -478,49 +476,41 @@ function onSingleClickWMS(evt) {
                                 if (cells.length >= 2) {
                                     var key = (cells[0].textContent || '').trim().toLowerCase();
                                     var val = (cells[1].textContent || '').trim();
-                                    if (key.indexOf('finca') !== -1 || key.indexOf('num_finca') !== -1 || key.indexOf('nfinca') !== -1 || key.indexOf('numero') !== -1) {
-                                        fincaValue = val;
-                                        break;
+                                    if (key.indexOf('finca') !== -1 || key.indexOf('num_finca') !== -1 || key.indexOf('nfinca') !== -1 || key.indexOf('numero') !== -1 || key.indexOf('plano') !== -1 || key.indexOf('propietario') !== -1) {
+                                        if (key.indexOf('finca') !== -1 || key.indexOf('num') !== -1) {
+                                            fincaValue = val;
+                                            break;
+                                        } else if (!fincaValue) {
+                                            fincaValue = val; // fallback to plano or propietario if finca not found yet
+                                        }
                                     }
                                 }
                             }
                             
-                            // Remove the loading roller from popupContent string so it doesn't accumulate
-                            popupContent = popupContent.replace('<div class="roller-switcher" style="height: 25px; width: 25px;"></div>', '');
-                            
                             popupContent += '<div style="margin-bottom: 5px;"><a><b>' + wmsTitle + '</b></a></div>';
                             if (fincaValue) {
-                                popupContent += '<div style="font-size: 13px; padding: 5px; background: #f0f0f0; border-radius: 4px;"><b>Finca:</b> ' + fincaValue + '</div><br>';
+                                popupContent += '<div style="font-size: 13px; padding: 5px; background: #2c2c2c; color: white; border-radius: 4px;"><b>Finca:</b> ' + fincaValue + '</div><br>';
                             } else {
-                                // Fallback a mostrar todo si no encuentra el campo finca
+                                popupContent += '<div style="color:red; font-size:11px;">No se encontró el campo Finca.</div>';
                                 popupContent += html + '<br>';
                             }
                             updatePopup();
                         } else {
-                            // Empty response or no table
-                            popupContent = popupContent.replace('<div class="roller-switcher" style="height: 25px; width: 25px;"></div>', '');
+                            // Server returned something, but not a table
                             if (popupContent.trim() === '') {
-                                container.style.display = 'none';
-                            } else {
+                                popupContent += '<div style="font-size: 12px; color: #888;">Respuesta vacía o formato desconocido del servidor SNITCR.</div>';
                                 updatePopup();
                             }
                         }
                     })
                     .catch((err) => {
-                        popupContent = popupContent.replace('<div class="roller-switcher" style="height: 25px; width: 25px;"></div>', '');
-                        if (popupContent.trim() === '') {
-                            container.style.display = 'none';
-                        } else {
-                            updatePopup();
-                        }
+                        popupContent = popupContent.replace(loaderHtml, '');
+                        popupContent += '<div style="color: #ff6b6b; font-size: 12px; padding: 5px;"><b>Error de red:</b><br>' + err.message + '</div>';
+                        updatePopup();
                     })
                     .finally(() => {
-                        var loaderIcon = document.querySelector('.roller-switcher');
+                        var loaderIcon = document.querySelector('.wms-loader');
                         if (loaderIcon) loaderIcon.remove();
-                        // If after everything the popup is empty, hide it
-                        if (content.innerHTML.trim() === '') {
-                            container.style.display = 'none';
-                        }
                     });
             }
         }
