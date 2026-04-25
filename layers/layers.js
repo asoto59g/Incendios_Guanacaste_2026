@@ -50,7 +50,7 @@ var lyr_PropietariosZona2_2 = new ol.layer.Tile({
                             
                             
                           });
-              wms_layers.push([lyr_PropietariosZona2_2, 0]);
+              wms_layers.push([lyr_PropietariosZona2_2, 1]);
 var lyr_PropietariosZona1_3 = new ol.layer.Tile({
                             source: new ol.source.TileWMS(({
                               url: "https://siri.snitcr.go.cr/Geoservicios/wms?request%3DGetCapabilities",
@@ -67,7 +67,7 @@ var lyr_PropietariosZona1_3 = new ol.layer.Tile({
                             
                             
                           });
-              wms_layers.push([lyr_PropietariosZona1_3, 0]);
+              wms_layers.push([lyr_PropietariosZona1_3, 1]);
 
 lyr_GoogleHybrid_0.setVisible(true);lyr_incendios_1.setVisible(true);lyr_PropietariosZona2_2.setVisible(true);lyr_PropietariosZona1_3.setVisible(true);
 var layersList = [lyr_GoogleHybrid_0,lyr_incendios_1,lyr_PropietariosZona2_2,lyr_PropietariosZona1_3];
