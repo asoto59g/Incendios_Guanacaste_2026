@@ -1,4 +1,5 @@
 # 🔥 Incidencias de Quemas — Liberia, Guanacaste (2019–2026)
+Visor geografico en siguiente link:  https://asoto59g.github.io/Incendios_Guanacaste_2026/
 
 Análisis multitemporal de incendios forestales y su relación con la cobertura del suelo en cinco cantones de la provincia de Guanacaste, Costa Rica, utilizando **Google Earth Engine (GEE)** y **QGIS**.
 
