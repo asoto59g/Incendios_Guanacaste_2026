@@ -466,7 +466,8 @@ function onSingleClickWMS(evt) {
 
                 Promise.race([tryFetch(urlsToTry), timeoutPromise])
                     .then((html) => {
-                        if (html.indexOf('<table') !== -1 || html.indexOf('<TABLE') !== -1) {
+                        // Check if the response contains actual data (Geoserver usually returns a table or at least some body content)
+                        if (html && html.trim().length > 0 && html.indexOf('<table') !== -1) {
                             var parser = new DOMParser();
                             var doc = parser.parseFromString(html, 'text/html');
                             var rows = doc.querySelectorAll('tr');
@@ -484,21 +485,42 @@ function onSingleClickWMS(evt) {
                                 }
                             }
                             
-                            popupContent += '<a><b>' + wmsTitle + '</b></a><br>';
+                            // Remove the loading roller from popupContent string so it doesn't accumulate
+                            popupContent = popupContent.replace('<div class="roller-switcher" style="height: 25px; width: 25px;"></div>', '');
+                            
+                            popupContent += '<div style="margin-bottom: 5px;"><a><b>' + wmsTitle + '</b></a></div>';
                             if (fincaValue) {
-                                popupContent += '<div style="margin-top: 5px; font-size: 13px;"><b>Finca:</b> ' + fincaValue + '</div><br>';
+                                popupContent += '<div style="font-size: 13px; padding: 5px; background: #f0f0f0; border-radius: 4px;"><b>Finca:</b> ' + fincaValue + '</div><br>';
                             } else {
                                 // Fallback a mostrar todo si no encuentra el campo finca
                                 popupContent += html + '<br>';
                             }
                             updatePopup();
+                        } else {
+                            // Empty response or no table
+                            popupContent = popupContent.replace('<div class="roller-switcher" style="height: 25px; width: 25px;"></div>', '');
+                            if (popupContent.trim() === '') {
+                                container.style.display = 'none';
+                            } else {
+                                updatePopup();
+                            }
+                        }
+                    })
+                    .catch((err) => {
+                        popupContent = popupContent.replace('<div class="roller-switcher" style="height: 25px; width: 25px;"></div>', '');
+                        if (popupContent.trim() === '') {
+                            container.style.display = 'none';
+                        } else {
+                            updatePopup();
                         }
                     })
                     .finally(() => {
-                        setTimeout(() => {
-                            var loaderIcon = document.querySelector('.roller-switcher');
-                            if (loaderIcon) loaderIcon.remove();
-                        }, 500); // (0.5 second)
+                        var loaderIcon = document.querySelector('.roller-switcher');
+                        if (loaderIcon) loaderIcon.remove();
+                        // If after everything the popup is empty, hide it
+                        if (content.innerHTML.trim() === '') {
+                            container.style.display = 'none';
+                        }
                     });
             }
         }
